@@ -13,6 +13,7 @@ from matplotlib.gridspec import GridSpec
 from scipy import stats
 from tkinter import Tk
 from tkinter.filedialog import askdirectory
+import os
 
 Fs = 24414.0625
 stiDur = [0.01, 0.05, 0.2]
@@ -27,6 +28,17 @@ def MaxIdx(dd, x):
     idx_max = int(stiDur[dd]*Fs)+x
     return idx_max  
 
+def ask_directory():
+    root = Tk()
+    sig_path = askdirectory(title='Select Folder')
+    root.withdraw()
+    return sig_path
+
+def get_names(sig_path, file_tile):
+    file_names = os.listdir(sig_path)
+    ori_names = [file_name for file_name in file_names if all([x in file_name for x in [file_tile]])]
+    return ori_names
+
 class EphysParameter():
     
     def __init__(self):
@@ -38,8 +50,7 @@ class EphysParameter():
         self.nDur = 3
         self.nITD = 3
         self.nChannel = 32
-    
-
+        
 class AnalysisEphys(EphysParameter):
 
     # get file name
