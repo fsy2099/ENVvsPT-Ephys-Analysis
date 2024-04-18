@@ -8,30 +8,23 @@ import sys
 import numpy as np
 import numpy.matlib
 import os 
-sys.path.append('C:\\Users\\shiyi\\Documents\\1_Project\\ENVvsPT\\pipiline2.0\\EphysAnalysis')
+# sys.path.append('C:\\Users\\shiyi\\Documents\\1_Project\\ENVvsPT\\pipiline2.0\\EphysAnalysis')
 import EphysAnalysis as ea
 #%%
-from tkinter import Tk
-from tkinter.filedialog import askdirectory
-root = Tk()
-sig_path = askdirectory(title='Select Folder')
-root.withdraw()
-results_path = sig_path
-file_names = os.listdir(sig_path)
-ori_names = [file_name for file_name in file_names if all([x in file_name for x in ["_OriginSigArray.npy"]])]
-print(ori_names)
+sig_path = ea.ask_directory()
+ori_names = ea.get_names(sig_path, "_OriginSigArray.npy")
 #%%
 for ori_name in ori_names:
-    file = ea.AnalysisEphys(ori_name, sig_path)
-    ori_sig = file.load_original()
-    sig = ea.ArtifactRejection(ori_sig)
-    sig.creat_clean_array()
-    for cc in range(sig.nChannel):
-        for ff in range(sig.nRate):
-            for dd in range(sig.nDur):
-                for ii in range(sig.nITD):
-                    for jj in range(sig.nITD):
-                        clean_sig = sig.artifact_rejection(cc, ff, dd, ii, jj)
+    ori_sig = ea.load_original(ori_name, sig_path)
+    artifact_rejection = ea.ArtifactRejection(ori_sig)
+    artifact_rejection.creat_clean_array()
+    for cc in range(artifact_rejection.nChannel):
+        for ff in range(artifact_rejection.nRate):
+            for dd in range(artifact_rejection.nDur):
+                for ii in range(artifact_rejection.nITD):
+                    for jj in range(artifact_rejection.nITD):
+                        clean_sig = artifact_rejection.reject_artifact(cc, ff, dd, ii, jj)
+                        
                         
                         
                         
