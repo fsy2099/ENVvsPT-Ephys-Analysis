@@ -68,13 +68,15 @@ class ArtifactRejection(EphysParameter):
         self.ori_array = original_sig
         self.nSamples = self.ori_array.shape[-2]
         self.nTrials = self.ori_array.shape[-1]
+        self.kaiserBeta = 5
+        self.kaiserN = 256
         
     def reject_artifact(self, cc, ff, dd, ii, jj):
         self.calc_avg(self.ori_array[cc, ff, dd, ii, jj, :, :])
         self.subtract_avg(cc, ff, dd, ii, jj)
         return self.clean_array[cc, ff, dd, ii, jj, :, :]
     
-    def creat_clean_array(self):
+    def clean_array_ready(self):
         self.clean_array = np.zeros((self.nChannel, self.nRate, self.nDur, self.nITD, self.nITD, self.nSamples, self.nTrials) ,dtype = 'float32')
     
     def subtract_avg(self, cc, ff, dd, ii, jj):
@@ -84,62 +86,95 @@ class ArtifactRejection(EphysParameter):
         # averge out the trials
         template = np.mean(sig, -1)
         self.template_array = np.array([template]*self.nTrials).T
-                
-class ArtifactRemoveQuality(EphysParameter):
-    
-    def __init__(self, original_sig, clean_sig): # sig in channel
-        super().__init__()
-        self.kaiserBeta = 5
-        self.kaiserN = 256
         
-    def calc_ARR(self):
-        self.clean_SNR = self.calc_SNR()
-        self.ori_SNR = self.calc_SNR()
-        self.ARR = self.clean_SNR/self.ori_SNR        
-    
+    def ARR_array_ready(self):
+        self.ARR_array = np.zeros((self.nChannel, self.nRate, self.nDur, self.nITD, self.nITD) ,dtype = 'float32')
+                
+    def calc_ARR(self, cc, ff, dd, ii, jj):
+        # ARR = SNR_post/SNR_pre
+        # SNR = PSD-CSD/CSD
+        self.kaiserWin()
+        self.calc_idx(dd)
+        self.SNR_post = self.calc_SNR(self.ori_array[cc, ff, dd, ii, jj, :self.idx, 0], self.ori_array[cc, ff, dd, ii, jj, :self.idx, 1])
+        self.SNR_pre = self.calc_SNR(self.clean_array[cc, ff, dd, ii, jj, :self.idx, 0], self.clean_array[cc, ff, dd, ii, jj, :self.idx, 1])
+        
+    def calc_idx(self, dd):
+        self.idx = int(np.around(self.Fs*self.stiDur[dd]))
+
     def kaiserWin(self):
-        kaiser_window = get_window(('kaiser', self.kaiserBeta), self.kaiserN)
-        return kaiser_window
+        self.kaiser = get_window(('kaiser', self.kaiserBeta), self.kaiserN)
     
-    def CalcPSD(self, sig):
-        win = self.kaiserWin()
-        f_psd, sig_psd = welch(sig, Fs, window = win, nperseg = len(win))
-        return f_psd, sig_psd
-    
-    def CalcCSD(self, sig1, sig2):
-        win = self.kaiserWin()
-        f_csd, sig_csd = csd(sig1, sig2, Fs, window = win, nperseg = len(win))
-        return f_csd, sig_csd    
-    
-    def CalcSNR(self, sig1, sig2):
-        f_csd, sig_csd = self.CalcCSD(sig1, sig2)
-        f_psd, sig_psd = self.CalcPSD(sig1)
+    def calc_SNR(self, sig1, sig2):
+        f_csd, sig_csd = self.calc_CSD(sig1, sig2)
+        f_psd, sig_psd = self.calc_PSD(sig1)
         sig_snr = (sig_psd-sig_csd)/sig_csd
-        return f_psd, sig_snr
+        return sig_snr
     
-    def CalcARR(self, sig1, sig2):
-        ARR = sig1/sig2        
-        return np.abs(ARR)
+    def calc_CSD(self, sig1, sig2):
+        f_csd, sig_csd = csd(sig1, sig2, Fs, window = self.kaiser, nperseg = len(self.kaiser))
+        
+        
+        
     
-    def GetHarmonicIdx(self, del_f, freq_up, F0):
-        i = np.arange(0, freq_up, F0)[1:]
-        idx = np.asarray((np.around(i/del_f)), dtype = 'int')
-        self.HarmonicIdx = idx
+    # def calc_ARR(self, cc, ff, dd, ii, jj):
+        # self.ori_array
+        # self.clean_array
+
+# class ArtifactRemoveQuality(EphysParameter):
     
-    def CheckHarmonicARR(self, freq, sig, F0):
-        del_f = freq[1]
-        freq_up = freq[-1]
-        self.GetHarmonicIdx(del_f, freq_up, F0)
-        self.HarmonicARR = [sig[n] for n in self.HarmonicIdx]
-        # self.ARRmean()
-        # return self.ARRAvg
+#     def __init__(self, original_sig, clean_sig): # sig in channel
+#         super().__init__()
+#         self.kaiserBeta = 5
+#         self.kaiserN = 256
+        
+#     def calc_ARR(self):
+#         self.clean_SNR = self.calc_SNR()
+#         self.ori_SNR = self.calc_SNR()
+#         self.ARR = self.clean_SNR/self.ori_SNR        
     
-    def ARRmean(self, freq, sig, F0):
-        self.CheckHarmonicARR(freq, sig, F0)
-        # self.GetHarmonicIdx(del_f, freq_up, F0)
-        self.ARRAvg = np.mean(self.HarmonicARR)
-        ARRindB = round(20*np.log10(self.ARRAvg), 2)        
-        return ARRindB    
+#     def kaiserWin(self):
+#         kaiser_window = get_window(('kaiser', self.kaiserBeta), self.kaiserN)
+#         return kaiser_window
+    
+#     def CalcPSD(self, sig):
+#         win = self.kaiserWin()
+#         f_psd, sig_psd = welch(sig, Fs, window = win, nperseg = len(win))
+#         return f_psd, sig_psd
+    
+#     def CalcCSD(self, sig1, sig2):
+#         win = self.kaiserWin()
+#         f_csd, sig_csd = csd(sig1, sig2, Fs, window = win, nperseg = len(win))
+#         return f_csd, sig_csd    
+    
+#     def CalcSNR(self, sig1, sig2):
+#         f_csd, sig_csd = self.CalcCSD(sig1, sig2)
+#         f_psd, sig_psd = self.CalcPSD(sig1)
+#         sig_snr = (sig_psd-sig_csd)/sig_csd
+#         return f_psd, sig_snr
+    
+#     def CalcARR(self, sig1, sig2):
+#         ARR = sig1/sig2        
+#         return np.abs(ARR)
+    
+#     def GetHarmonicIdx(self, del_f, freq_up, F0):
+#         i = np.arange(0, freq_up, F0)[1:]
+#         idx = np.asarray((np.around(i/del_f)), dtype = 'int')
+#         self.HarmonicIdx = idx
+    
+#     def CheckHarmonicARR(self, freq, sig, F0):
+#         del_f = freq[1]
+#         freq_up = freq[-1]
+#         self.GetHarmonicIdx(del_f, freq_up, F0)
+#         self.HarmonicARR = [sig[n] for n in self.HarmonicIdx]
+#         # self.ARRmean()
+#         # return self.ARRAvg
+    
+#     def ARRmean(self, freq, sig, F0):
+#         self.CheckHarmonicARR(freq, sig, F0)
+#         # self.GetHarmonicIdx(del_f, freq_up, F0)
+#         self.ARRAvg = np.mean(self.HarmonicARR)
+#         ARRindB = round(20*np.log10(self.ARRAvg), 2)        
+#         return ARRindB    
 
 # class GetName(AnalysisEphys):
 #     def __init__(self, name, sig_path):
