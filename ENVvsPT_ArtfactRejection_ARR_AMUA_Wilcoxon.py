@@ -13,7 +13,6 @@ import os
 import EphysAnalysis as ea
 #%%
 sig_path = ea.ask_directory()
-# sig_path = 'D:/0_Project/0_ENVvsPT_Ephys/Data/ND/2022_01_24'
 ori_names = ea.get_names(sig_path, "_OriginSigArray.npy")
 #%%
 for ori_name in ori_names:
@@ -37,6 +36,10 @@ for ori_name in ori_names:
                         AMUA
                         '''
                         AMUA_calculation.calc_AMUA(clean_sig, cc, ff, dd, ii, jj)
+        AMUA_calculation.AMUA_wilcoxon(cc)
+    artifact_rejection.save(ori_name, sig_path)
+    AMUA_calculation.save(ori_name, sig_path)
+                        
                         
                         
                         
