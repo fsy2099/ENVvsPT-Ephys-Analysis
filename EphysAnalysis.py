@@ -14,6 +14,7 @@ from scipy import stats
 from tkinter import Tk
 from tkinter.filedialog import askdirectory
 import os
+from scipy import stats
 
 Fs = 24414.0625
 stiDur = [0.01, 0.05, 0.2]
@@ -120,6 +121,23 @@ class ArtifactRejection(EphysParameter):
         template = np.mean(sig, -1)
         self.template_array = np.array([template]*self.nTrials).T
         
+    def save(self, ori_name, sig_path):
+        # save clean sig
+        name = ori_name[:-19]
+        # clean_name = name+'_CleanSigArray.npy'
+        # np.save(sig_path+clean_name, self.clean_array)
+        # save ARR trace
+        ARR_trace_name = name+'_CleanSig_ARRTrace.npy'
+        np.save(sig_path+'/'+ARR_trace_name, self.ARR_trace_array)
+        # save ARR freq
+        ARR_freq_name = name+'_CleanSig_ARRfreq.npy'
+        np.save(sig_path+'/'+ARR_freq_name, self.f)
+        # save ARR avg
+        ARR_avg_name = name+'_CleanSig_ARRavg.npy'
+        np.save(sig_path+'/'+ARR_avg_name, self.ARR)
+        
+        
+        
     '''
     Below methods calculate ARR
     Evaluate artifact rejection quality
@@ -139,7 +157,7 @@ class ArtifactRejection(EphysParameter):
         self.f, self.SNR_post = self.calc_SNR(self.ori_array[cc, ff, dd, ii, jj, :, 0], self.ori_array[cc, ff, dd, ii, jj, :, 1])
         self.f, self.SNR_pre = self.calc_SNR(self.clean_array[cc, ff, dd, ii, jj, :, 0], self.clean_array[cc, ff, dd, ii, jj, :, 1])
         self.ARR = self.SNR_post/self.SNR_pre
-        if self.ARR_trace_array == None:
+        if self.ARR_trace_array is None:
             self.ARR_trace_array_ready()
         self.ARR_trace_array[cc, ff, dd, ii, jj, :] = self.ARR        
 
@@ -191,6 +209,8 @@ class ArtifactRejection(EphysParameter):
         ARRindB = round(20*np.log10(AverageARR), 2)
         self.ARR_array[cc, ff, dd, ii, jj] = ARRindB
         
+
+
 class AMUACalc(EphysParameter):
     def __init__(self):
         super().__init__()
@@ -199,19 +219,30 @@ class AMUACalc(EphysParameter):
         self.response_end = 0.055
         self.baseline_start = 0.45
         self.AMUA_array = None
+        self.AMUA_resp_avg_array = None
+        self.AMUA_base_avg_array = None
+        self.nsamples = None
+        self.ntrials = None
+        self.wilcoxon_array = None
     
     def AMUA_array_ready(self):
         t = self.nsamples/self.Fs
         self.nsamples_down = int(self.Fs_downsample*t)
         self.AMUA_array = np.zeros((self.nChannel, self.nRate, self.nDur, self.nITD, self.nITD, self.nsamples_down, self.ntrials))
-        self.AMUA_filter_array = self.AMUA_array
+        self.AMUA_filter_array = np.zeros((self.nChannel, self.nRate, self.nDur, self.nITD, self.nITD, self.nsamples_down, self.ntrials))
         
-    def calc_AMUA(self, cleansig, cc, ff, dd, ii, jj, padLen=300):
+    def calc_AMUA(self, cleansig, cc, ff, dd, ii, jj, padLen=300, wilcoxon = True):
         self.cleansig = cleansig
-        if self.AMUA_array == None:
+        '''
+        generate AMUA_array
+        '''
+        if self.AMUA_array is None:
             self.nsamples = self.cleansig.shape[-2]
             self.ntrials = self.cleansig.shape[-1]
             self.AMUA_array_ready()
+        '''
+        Calculate AMUA
+        '''
         insig = filtfilt(self.bNotch, self.aNotch, self.cleansig, axis=0, padlen=padLen)
         insig = np.flip(insig)
         insig = filtfilt(self.bBand,self.aBand, insig, axis=0, padlen=padLen)
@@ -220,11 +251,59 @@ class AMUACalc(EphysParameter):
         insig = np.flip(insig)
         insig = resample(insig,self.nsamples_down)
         self.AMUA_array[cc, ff, dd, ii, jj, :, :] = insig
+        '''
+        Filter AMUA by low pass
+        '''
         self.AMUA_filter(insig, cc, ff, dd, ii, jj)
+        if wilcoxon:
+            self.AMUA_avg(cc, ff, dd, ii, jj)
     
     def AMUA_filter(self, insig, cc, ff, dd, ii, jj):
         insig = filtfilt(self.bLowB, self.aLowB, insig, axis=0, padlen=100)
         self.AMUA_filter_array[cc, ff, dd, ii, jj, :, :] = insig
+        
+    def AMUA_avg(self, cc, ff, dd, ii, jj, resp_start = 0.005, resp_end = 0.055, base_start = 0.45, base_end = 0.5):
+        insig = self.AMUA_filter_array[cc, ff, dd, ii, jj, :, :]
+        resp = np.mean(insig[int(self.Fs_downsample*resp_start):int(self.Fs_downsample*resp_end), :], 0)
+        base = np.mean(insig[int(self.Fs_downsample*base_start):int(self.Fs_downsample*base_end), :], 0)
+        if  self.AMUA_resp_avg_array is None:
+            self.AMUA_avg_array_ready()
+        self.AMUA_resp_avg_array[ff, dd, ii, jj, :] = resp
+        self.AMUA_base_avg_array[ff, dd, ii, jj, :] = base
+            
+    def AMUA_avg_array_ready(self):
+        self.AMUA_resp_avg_array = np.zeros((self.nRate, self.nDur, self.nITD, self.nITD, self.ntrials))
+        self.AMUA_base_avg_array = np.zeros((self.nRate, self.nDur, self.nITD, self.nITD, self.ntrials))
+        
+    def AMUA_wilcoxon(self, cc):
+        if self.wilcoxon_array is None:
+            self.wilcoxon_array_ready()
+        self.wilcoxon_array[cc, :, 0] = np.reshape(self.AMUA_resp_avg_array, (1, self.nRate*self.nDur*self.nITD*self.nITD*self.ntrials))[0]
+        self.wilcoxon_array[cc, :, 1] = np.reshape(self.AMUA_base_avg_array, (1, self.nRate*self.nDur*self.nITD*self.nITD*self.ntrials))[0]
+        self.wilcoxon_results[cc, :] = stats.wilcoxon(self.wilcoxon_array[cc, :, 0], self.wilcoxon_array[cc, :, 1])
+    
+    def wilcoxon_array_ready(self):
+        self.wilcoxon_array = np.zeros((self.nChannel, self.nRate*self.nDur*self.nITD*self.nITD*self.ntrials, 2))
+        self.wilcoxon_results = np.zeros((self.nChannel,2))
+        
+    def save(self, ori_name, sig_path):
+        name = name = ori_name[:-19]
+        
+        # AMUA_name = name+'_AMUA.npy'
+        # np.save(sig_path+AMUA_name, self.AMUA_array)
+        
+        AMUA_filtered_name = name+'_AMUAfiltered.npy'
+        np.save(sig_path+'/'+AMUA_filtered_name, self.AMUA_filter_array)
+        
+        AMUA_avg_name = name+'_AMUAavg.npy'
+        np.save(sig_path+'/'+AMUA_avg_name, self.wilcoxon_array)
+        
+        AMUA_wilcoxon_name = name+'_AMUA_wilcoxon.npy'
+        np.save(sig_path+'/'+AMUA_wilcoxon_name, self.wilcoxon_results)
+        
+        
+        
+        
 
         
     
@@ -318,121 +397,121 @@ class AMUACalc(EphysParameter):
 #     def loadARR(self):
 #         self.ARR_sig = np.load(self.sig_path+self.ARR_name, allow_pickle = True)
     
-class AMUACalc(GetName):
+# class AMUACalc(GetName):
     
-    def __init__(self, sig_name, sig_path):
-        super().__init__(sig_name, sig_path)
-        self.fs = 24414.0625
-        self.response_start = 0.005
-        self.response_end = 0.055
-        self.baseline_start = 0.45
-        self.lowpass = 6000
-        self.bandpassA = 300
-        self.bandpassB = 6000
-        self.lowpassB = 200
-        self.padLen = 300
-        self.Notchw0 = 50
-        self.NotchQ = 30
-        self.Fs_downsample = 2000
-        self.nblank = 5
-        # self.sig = sig
-        self.t = None
-        self.nsamples_down = None
-        self.ntrials = None
-        self.PredicSize()
-        self.bBand = None
-        self.aBand = None
-        self.bLow = None
-        self.aLow = None
-        self.bLowB = None
-        self.aLowB = None
-        self.bNotch = None
-        self.aNotch = None
-        self.AMUAFilterCoeffs()
-        self.amua_array = None
-        self.CreatSelectionArray()
-    # def MaxIdxAMUA(self, dd, x):
-    #     idx_max = int(stiDur[dd]*self.Fs_downsample)+x
-    #     return idx_max
+#     def __init__(self, sig_name, sig_path):
+#         super().__init__(sig_name, sig_path)
+#         self.fs = 24414.0625
+#         self.response_start = 0.005
+#         self.response_end = 0.055
+#         self.baseline_start = 0.45
+#         self.lowpass = 6000
+#         self.bandpassA = 300
+#         self.bandpassB = 6000
+#         self.lowpassB = 200
+#         self.padLen = 300
+#         self.Notchw0 = 50
+#         self.NotchQ = 30
+#         self.Fs_downsample = 2000
+#         self.nblank = 5
+#         # self.sig = sig
+#         self.t = None
+#         self.nsamples_down = None
+#         self.ntrials = None
+#         self.PredicSize()
+#         self.bBand = None
+#         self.aBand = None
+#         self.bLow = None
+#         self.aLow = None
+#         self.bLowB = None
+#         self.aLowB = None
+#         self.bNotch = None
+#         self.aNotch = None
+#         self.AMUAFilterCoeffs()
+#         self.amua_array = None
+#         self.CreatSelectionArray()
+#     # def MaxIdxAMUA(self, dd, x):
+#     #     idx_max = int(stiDur[dd]*self.Fs_downsample)+x
+#     #     return idx_max
     
-    def AMUAFilterCoeffs(self):
-        nyq = 0.5*Fs
-        self.bBand, self.aBand = butter(2,(self.bandpassA/nyq, self.bandpassB/nyq),'bandpass')
-        self.bLow,self.aLow = butter(2,(self.lowpass/nyq),'lowpass')
-        self.bNotch, self.aNotch = iirnotch(self.Notchw0, self.NotchQ, Fs)
-        self.Wn = 2*200/self.Fs_downsample
-        self.bLowB, self.aLowB = butter(2, self.Wn, 'lowpass')               
+#     def AMUAFilterCoeffs(self):
+#         nyq = 0.5*Fs
+#         self.bBand, self.aBand = butter(2,(self.bandpassA/nyq, self.bandpassB/nyq),'bandpass')
+#         self.bLow,self.aLow = butter(2,(self.lowpass/nyq),'lowpass')
+#         self.bNotch, self.aNotch = iirnotch(self.Notchw0, self.NotchQ, Fs)
+#         self.Wn = 2*200/self.Fs_downsample
+#         self.bLowB, self.aLowB = butter(2, self.Wn, 'lowpass')               
     
-    def calcAMUA(self, cc, ff, dd, ii, jj, padLen=300):
-        '''
-        cosidering some clean signal padding 1-3 zeros at begining to align up
-          in case the padding will affect the AMUA and frequency domain results
-        fllowing is checking code
-        '''
-        # coefs= self.AMUAFilterCoeffs()
-        # bpCoefs=coefs[0]
-        # lpCoefs=coefs[1]
-        # NotchCoefs = coefs[2]
-        insig = self.clean_sig[cc, ff, dd, ii, jj, self.nblank:, :]
-        insig = filtfilt(self.bNotch, self.aNotch, insig, axis=0, padlen=padLen)
-        insig = np.flip(insig)
-        insig=filtfilt(self.bBand,self.aBand, insig, axis=0, padlen=padLen)
-        insig=np.abs(insig)
-        insig=filtfilt(self.bLow,self.aLow,insig,axis=0, padlen=padLen)
-        insig = np.flip(insig)
-        self.amua_array[cc, ff, dd, ii, jj, :, :] = self.resampleAMUA(insig)
-        self.temp = self.resampleAMUA(insig)
-        # return signal
+#     def calcAMUA(self, cc, ff, dd, ii, jj, padLen=300):
+#         '''
+#         cosidering some clean signal padding 1-3 zeros at begining to align up
+#           in case the padding will affect the AMUA and frequency domain results
+#         fllowing is checking code
+#         '''
+#         # coefs= self.AMUAFilterCoeffs()
+#         # bpCoefs=coefs[0]
+#         # lpCoefs=coefs[1]
+#         # NotchCoefs = coefs[2]
+#         insig = self.clean_sig[cc, ff, dd, ii, jj, self.nblank:, :]
+#         insig = filtfilt(self.bNotch, self.aNotch, insig, axis=0, padlen=padLen)
+#         insig = np.flip(insig)
+#         insig=filtfilt(self.bBand,self.aBand, insig, axis=0, padlen=padLen)
+#         insig=np.abs(insig)
+#         insig=filtfilt(self.bLow,self.aLow,insig,axis=0, padlen=padLen)
+#         insig = np.flip(insig)
+#         self.amua_array[cc, ff, dd, ii, jj, :, :] = self.resampleAMUA(insig)
+#         self.temp = self.resampleAMUA(insig)
+#         # return signal
         
-    def resampleAMUA(self, insig):
-        # signal = resample_poly(insig, Fs_downsample, int(fs), axis=0)
-        signal=resample(insig,self.nsamples_down)
-        return signal
+#     def resampleAMUA(self, insig):
+#         # signal = resample_poly(insig, Fs_downsample, int(fs), axis=0)
+#         signal=resample(insig,self.nsamples_down)
+#         return signal
     
-    # def creatArray(self, dim):
-    #     if dim == 1:
-    #         array = np.zeros((self.nchannel))
+#     # def creatArray(self, dim):
+#     #     if dim == 1:
+#     #         array = np.zeros((self.nchannel))
         
     
-    def CreatAMUAarray(self):
-        self.amua_array = np.zeros((nChannel, nRate, nDur, nITD, nITD, self.nsamples_down, self.ntrials))
+#     def CreatAMUAarray(self):
+#         self.amua_array = np.zeros((nChannel, nRate, nDur, nITD, nITD, self.nsamples_down, self.ntrials))
     
-    def CreatArrayincc(self):
-        self.selection_array = np.zeros((nChannel))
+#     def CreatArrayincc(self):
+#         self.selection_array = np.zeros((nChannel))
     
-    def CreatSelectionArray(self):
-        self.resp_array = np.zeros((nRate, nDur, nITD, nITD, self.ntrials))
-        self.basel_array = np.zeros((nRate, nDur, nITD, nITD, self.ntrials))
+#     def CreatSelectionArray(self):
+#         self.resp_array = np.zeros((nRate, nDur, nITD, nITD, self.ntrials))
+#         self.basel_array = np.zeros((nRate, nDur, nITD, nITD, self.ntrials))
             
-    def PredicSize(self):
-        self.loadClean()
-        self.ntrials = self.clean_sig.shape[-1]
-        self.t = (self.clean_sig.shape[-2]-self.nblank)/Fs        
-        self.nsamples_down = int(self.Fs_downsample*self.t)
+#     def PredicSize(self):
+#         self.loadClean()
+#         self.ntrials = self.clean_sig.shape[-1]
+#         self.t = (self.clean_sig.shape[-2]-self.nblank)/Fs        
+#         self.nsamples_down = int(self.Fs_downsample*self.t)
         
-    def filtAMUA(self):
-        insig = filtfilt(self.bLowB, self.aLowB, self.amua_temp, axis=0, padlen=100)
-        self.amua_temp = insig
+#     def filtAMUA(self):
+#         insig = filtfilt(self.bLowB, self.aLowB, self.amua_temp, axis=0, padlen=100)
+#         self.amua_temp = insig
     
-    def meanAMUA(self, start, end):
-        if end == None:
-            insig = np.mean(self.amua_temp[start:], 0)
-        else:
-            insig = np.mean(self.amua_temp[start:end], 0)   
-        return insig
+#     def meanAMUA(self, start, end):
+#         if end == None:
+#             insig = np.mean(self.amua_temp[start:], 0)
+#         else:
+#             insig = np.mean(self.amua_temp[start:end], 0)   
+#         return insig
         
-    def prepRespBaseline(self, cc, ff, dd, ii, jj):
-        self.amua_temp = self.temp
-        self.filtAMUA()
-        self.resp_array[ff, dd, ii, jj] = self.meanAMUA(int(self.Fs_downsample*self.response_start), int(self.Fs_downsample*self.response_end))
-        self.basel_array[ff, dd, ii, jj] = self.meanAMUA(int(self.Fs_downsample*self.baseline_start), None)
+#     def prepRespBaseline(self, cc, ff, dd, ii, jj):
+#         self.amua_temp = self.temp
+#         self.filtAMUA()
+#         self.resp_array[ff, dd, ii, jj] = self.meanAMUA(int(self.Fs_downsample*self.response_start), int(self.Fs_downsample*self.response_end))
+#         self.basel_array[ff, dd, ii, jj] = self.meanAMUA(int(self.Fs_downsample*self.baseline_start), None)
         
-    def wilcoxonAMUA(self, cc):
-        response = np.reshape(self.resp_array, (1, nRate*nDur*nITD*nITD*self.ntrials))[0]
-        baseline = np.reshape(self.basel_array, (1, nRate*nDur*nITD*nITD*self.ntrials))[0]
-        results = stats.wilcoxon(response, baseline)
-        if results[1] < 0.05:
-            self.selection_array[cc] = 1
+#     def wilcoxonAMUA(self, cc):
+#         response = np.reshape(self.resp_array, (1, nRate*nDur*nITD*nITD*self.ntrials))[0]
+#         baseline = np.reshape(self.basel_array, (1, nRate*nDur*nITD*nITD*self.ntrials))[0]
+#         results = stats.wilcoxon(response, baseline)
+#         if results[1] < 0.05:
+#             self.selection_array[cc] = 1
             
             
 # class Plot(GetName):
